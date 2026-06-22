@@ -122,6 +122,6 @@ Fallback behavior: If no AI URL configured, or if parsing fails, uses predefined
 ## Clock Timing Notes
 
 - LiDAR subscription at 30Hz for obstacle detection (responsive)
-- Timer callback at 500ms (`timer_period`) - only checks state when moving
+- Timer callback at 100ms (`timer_period`) - checks state when moving
 - Use `clock.now().nanoseconds / 1e9` for wall-clock time comparisons
 - Duration-based state transitions prevent infinite loops
