@@ -436,6 +436,14 @@ class AIDriveNode(Node):
                 current_angular_vel = 0.0
                 self.get_logger().info(f"[OBSTACLE CLEAR] Path open at {obstacle_dist:.2f}m, angular vel={current_angular_vel:.4f}")
 
+                # Transition back to FORWARD_1 after a brief pause (allows robot to verify clear path)
+                duration = self.move_distance / self.linear_speed
+                if self.action_start_time is not None and (now - self.action_start_time >= duration):
+                    self.state = 'FORWARD_1'
+                    self.spin_retry_count = 0
+                    self.action_start_time = now
+                    self.get_logger().info(f"[OBSTACLE_AVOID] Path verified clear, transitioning to FORWARD_1")
+
             # Apply velocity: zero linear, angular handles spin/forward decisions
             self.twist.linear.x = 0.0
             self.twist.angular.z = current_angular_vel
