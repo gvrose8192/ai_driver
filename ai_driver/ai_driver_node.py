@@ -421,7 +421,7 @@ class AIDriveNode(Node):
                 # Obstacle still within stop distance - try to find clear path
                 if abs(self.twist.angular.z) >= 1e-6:
                     # AI is responding with spin commands, use them
-                    pass
+                    current_angular_vel = self.twist.angular.z
                 elif has_recent_error:
                     # AI errored recently but we need to keep trying - spin with reduced speed
                     current_angular_vel = self.spin_speed * 0.5
