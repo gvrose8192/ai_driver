@@ -92,7 +92,7 @@ class AIDriveNode(Node):
 
         self.get_logger().info(f"DEBUG LIDAR metrics: ranges_len={len(ranges)}, range_min={range_min}, range_max={range_max}, angle_min={angle_min}, angle_max={self.scan_message.angle_max}, angle_increment={angle_increment}")
 
-        # Sample 4 points between full left and full right
+        # Sample 9 points between full left and full right
         target_angles_deg = [-180, -135, -90, -45, 0, 45, 90, 135, 180]
         obstacle_readings = []
 
@@ -132,7 +132,7 @@ class AIDriveNode(Node):
             "num_sensors": len(ranges),
             "closest_obstacle_distance": float(min_distance) if min_distance < float('inf') else None,
             "obstacle_readings": obstacle_readings,
-            "request": "I have gathered LIDAR data for 4 directions: -90, -45, 45, and 90 degrees. Analyze this data and determine: 1) Is there a clear path in any of these directions? 2) If an obstacle exists, should we spin to avoid it? How many degrees? 3) If a clear path is found, what is the best direction to resume forward motion? Return in JSON format with path_clear (boolean), spin_direction (\"left\" or \"right\"), spin_angle_degrees (float), and suggested_heading_degrees (float). If path_clear is true, suggested_heading_degrees should be the angle of the clear path."
+            "request": "I have gathered LIDAR data for 9 directions: -180, -135,-90, -45, 0, 45, 90, 135 and 180 degrees. Analyze this data and determine: 1) Is there a clear path in any of these directions? 2) If an obstacle exists, should we spin to avoid it? How many degrees? 3) If a clear path is found, what is the best direction to resume forward motion? Return in JSON format with path_clear (boolean), spin_direction (\"left\" or \"right\"), spin_angle_degrees (float), and suggested_heading_degrees (float). If path_clear is true, suggested_heading_degrees should be the angle of the clear path."
         }
 
         return payload
@@ -487,87 +487,6 @@ class AIDriveNode(Node):
             self.twist.linear.x = 0.0
             self.twist.angular.z = 0.0
             self.publisher_.publish(self.twist)
-
-    def set_duration(self, state_name, duration):
-        """Helper to set how long the robot should move in seconds"""
-        self.drive_duration = duration
-        self.action_start_time = self.clock.now().nanoseconds / 1e9
-
-    def stop_and_wait(self):
-        """Stop and wait - always publishes zero velocity"""
-        self.twist.linear.x = 0.0
-        self.twist.angular.z = 0.0
-        self.publisher_.publish(self.twist)
-
-    def move_forward(self, speed=None):
-        """Helper to move forward - respects OBSTACLE_AVOID state"""
-        if speed is None:
-            speed = self.linear_speed
-
-        # Always check obstacle avoidance first
-        if self.state == 'OBSTACLE_AVOID':
-            return True
-
-        self.twist.linear.x = speed
-        self.twist.angular.z = 0.0
-        duration = self.move_distance / speed
-        now = self.clock.now().nanoseconds / 1e9
-
-        if self.action_start_time is not None and (now - self.action_start_time >= duration):
-            self.state = 'TURN_SPIN'
-            self.action_start_time = now
-            return False
-        self.publisher_.publish(self.twist)
-        return True
-
-    def spin_robot(self):
-        """Helper to spin robot - respects OBSTACLE_AVOID state"""
-        speed = self.angular_speed
-
-        # Always check obstacle avoidance first
-        if self.state == 'OBSTACLE_AVOID':
-            return True
-
-        self.twist.linear.x = 0.0
-        self.twist.angular.z = speed
-        angle_to_spin = math.pi
-        spin_duration = angle_to_spin / speed
-
-        if self.state == 'TURN_SPIN':
-            now = self.clock.now().nanoseconds / 1e9
-            if self.action_start_time is not None and (now - self.action_start_time >= spin_duration):
-                self.state = 'FORWARD_2'
-                self.action_start_time = now
-                return False
-
-        self.publisher_.publish(self.twist)
-        return True
-
-    def stop_drive_and_exit(self):
-        """Stop the robot - respects OBSTACLE_AVOID state"""
-        if self.state == 'OBSTACLE_AVOID':
-            pass  # Already stopped by obstacle avoidance
-        else:
-            self.twist.linear.x = 0.0
-            self.twist.angular.z = 0.0
-            self.publisher_.publish(self.twist)
-
-    def set_velocity(self, linear_x, angular_z):
-        """Set robot velocity directly (used in exception handlers)."""
-        self.twist.linear.x = linear_x
-        self.twist.angular.z = angular_z
-        self.publisher_.publish(self.twist)
-
-    def spin_finish(self):
-        """Spin for finish - respects OBSTACLE_AVOID state"""
-        if self.state == 'OBSTACLE_AVOID':
-            return True
-
-        speed = self.angular_speed
-        self.twist.linear.x = 0.0
-        self.twist.angular.z = speed
-        self.publisher_.publish(self.twist)
-        return True
 
 def main(args=None):
     rclpy.init()
