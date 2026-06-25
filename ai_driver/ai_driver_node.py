@@ -1,4 +1,17 @@
 #!/usr/bin/env python3
+import sys
+import argparse
+
+# Parse command-line arguments before rclpy.init()
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model_url', default='', help='AI model API URL')
+    parser.add_argument('--model_name', default='qwen/qwen3.5-9b', help='Model name to use')
+    return parser.parse_args()
+
+# Parse args at module level
+args = parse_args()
+
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
@@ -14,7 +27,8 @@ class AIDriveNode(Node):
     def __init__(self):
         super().__init__('ai_drive')
 
-        # Parameters
+        # Parameters - declare model_url first so it exists for the or check
+        self.model_url = self.declare_parameter('model_url', args.model_url).value
         self.linear_speed = float(self.declare_parameter('linear_speed', 0.2).value)
         self.angular_speed = float(self.declare_parameter('angular_speed', 0.5).value)
         self.move_distance = float(self.declare_parameter('move_distance', 1.25).value)
@@ -25,9 +39,8 @@ class AIDriveNode(Node):
         self.max_spin_attempts = int(self.declare_parameter('max_spin_attempts', 4).value)
         self.attempt_timeout = float(self.declare_parameter('attempt_timeout', 2.5).value)
 
-        # AI agent parameters
-        self.model_url = self.declare_parameter('model_url', '').value
-        self.model_name = self.declare_parameter('model_name', 'qwen').value
+        # Model name - use parsed arg as default for qwen3.5-9b
+        self.model_name = self.model_name or self.declare_parameter('model_name', 'qwen/qwen3.5-9b').value
 
         # Publisher
         self.publisher_ = self.create_publisher(Twist, 'cmd_vel', 10)
@@ -54,8 +67,8 @@ class AIDriveNode(Node):
         self.timer = self.create_timer(self.timer_period, self.drive_callback)
 
         # Create services (MUST be instance methods to access self)
-        self.reset_service = self.create_service(Trigger, '/ai_driver/reset', self.handle_reset)
-        self.start_service = self.create_service(Trigger, '/ai_driver/start', self.handle_start)
+        self.reset_service = self.create_service(Trigger, '/ai_drive/reset', self.handle_reset)
+        self.start_service = self.create_service(Trigger, '/ai_drive/start', self.handle_start)
 
         # AI-based spin tracking (for OBSTACLE_AVOID state)
         self.ai_spin_request_count = 0
@@ -76,7 +89,7 @@ class AIDriveNode(Node):
             f"Simple Drive Node initialized. "
             f"Linear speed: {self.linear_speed} m/s, Angular speed: {self.angular_speed} rad/s, "
             f"Move distance: {self.move_distance}m, Stop distance: {self.stop_distance}m, "
-            f"Spin speed: {self.spin_speed} rad/s"
+            f"Spin speed: {self.spin_speed} rad/s, Model URL: {self.model_url}, Model Name: {self.model_name}"
         )
 
     def _prepare_lidar_payload(self):
@@ -403,23 +416,36 @@ class AIDriveNode(Node):
         elif self.state == 'OBSTACLE_AVOID':
             obstacle_dist = self.find_closest_obstacle()
 
+            # Increment spin retry counter for tracking (if needed)
+            if self.spin_retry_count is None:
+                self.spin_retry_count = 0
+
+            # Make AI request on first timer cycle or when current angular velocity is near zero
+            # This ensures we query the API to get direction recommendations
+            should_attempt_ai_request = (self.ai_request_count is None or abs(self.twist.angular.z) < 1e-6)
+
             # Check for recent API errors - used to decide fallback behavior
             has_recent_error = not self.last_request_success
 
             if obstacle_dist is None:
-                # No LIDAR data available - spin ONLY if recent AI calls succeeded or we haven't exhausted retries
-                if self.spin_retry_count < self.max_spin_attempts and has_recent_error:
+                # No LIDAR data available
+                if should_attempt_ai_request and not has_recent_error:
+                    # Try AI request even without fresh LIDAR (might have stale data)
+                    self._send_ai_request()
+                    current_angular_vel = 0.0  # Wait for next cycle to check results
+                elif self.spin_retry_count < self.max_spin_attempts and has_recent_error:
                     # Spin to find path while retrying (but don't spin indefinitely on error)
                     current_angular_vel = -self.spin_speed
                     self.get_logger().info(f"[NO LIDAR + RETRYING] Spinning to find path (attempt {self.spin_retry_count})")
-                elif not has_recent_error and self.ai_request_count is None:
-                    # First request, no AI response yet - don't spin aggressively
-                    current_angular_vel = 0.0
-                    self.get_logger().info("[NO LIDAR + FIRST REQUEST] Waiting for LIDAR data or AI response")
 
             elif (obstacle_dist <= self.stop_distance and self.spin_retry_count < self.max_spin_attempts):
                 # Obstacle still within stop distance - try to find clear path
-                if abs(self.twist.angular.z) >= 1e-6:
+
+                if should_attempt_ai_request and not has_recent_error:
+                    # Make AI request to get direction recommendation
+                    self._send_ai_request()
+                    current_angular_vel = 0.0  # Wait for next cycle to check results
+                elif abs(self.twist.angular.z) >= 1e-6:
                     # AI is responding with spin commands, use them
                     current_angular_vel = self.twist.angular.z
                 elif has_recent_error:
@@ -427,9 +453,9 @@ class AIDriveNode(Node):
                     current_angular_vel = self.spin_speed * 0.5
                     self.get_logger().warning(f"[AI ERROR + FALLBACK] Obstacle at {obstacle_dist:.2f}m, using reduced fallback spin")
                 else:
-                    # No valid spin command from AI - use fallback only if retry count allows
-                    current_angular_vel = self.spin_speed * 0.5
-                    self.get_logger().warning(f"[AI NO SPIN COMMAND] Obstacle at {obstacle_dist:.2f}m, using reduced fallback spin (retry {self.spin_retry_count})")
+                    # No valid spin command from AI or first attempt - use fallback only if retry count allows
+                    current_angular_vel = -self.spin_speed * 0.8
+                    self.get_logger().warning(f"[AI NO SPIN COMMAND] Obstacle at {obstacle_dist:.2f}m, using reduced fallback spin (attempt {self.spin_retry_count})")
 
             elif obstacle_dist is not None and obstacle_dist > self.stop_distance:
                 # Obstacle is beyond stop distance - path is clear, resume forward motion
