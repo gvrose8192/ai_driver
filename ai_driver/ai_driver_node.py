@@ -40,7 +40,7 @@ class AIDriveNode(Node):
         self.attempt_timeout = float(self.declare_parameter('attempt_timeout', 2.5).value)
 
         # Model name - use parsed arg as default for qwen3.5-9b
-        self.model_name = self.model_name or self.declare_parameter('model_name', 'qwen/qwen3.5-9b').value
+        self.model_name = args.model_name or self.declare_parameter('model_name', 'qwen/qwen3.5-9b').value
 
         # Publisher
         self.publisher_ = self.create_publisher(Twist, 'cmd_vel', 10)
